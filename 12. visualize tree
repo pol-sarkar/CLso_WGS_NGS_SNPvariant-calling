@@ -1,0 +1,29 @@
+#visualize IQ-tree
+# Install packages if not already
+if (!requireNamespace("ape", quietly = TRUE)) install.packages("ape")
+if (!requireNamespace("ggtree", quietly = TRUE)) BiocManager::install("ggtree")
+
+# Load libraries
+library(ape)
+library(ggtree)
+
+# Read the tree
+tree_file <- "Liberibacter_coreSNP.treefile"
+tree <- read.tree(tree_file)
+
+# Basic plot
+plot(tree, cex=0.8)  # simple plot
+
+# Fancy plot with ggtree
+ggtree(tree) +
+  geom_tiplab(size=3, align=TRUE) +
+  theme_tree2() +
+  ggtitle("Liberibacter Core SNP Phylogeny")
+#save
+ggsave("Liberibacter_coreSNP_tree.pdf", width=8, height=6)
+
+
+#for pdf
+pdf("Liberibacter_coreSNP_tree.pdf", width=8, height=10)  # open a PDF
+plot(tree, cex=0.8)                                        # draw the tree
+dev.off()                                                   # close PDF

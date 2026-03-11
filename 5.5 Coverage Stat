@@ -1,0 +1,62 @@
+#Create the script inside this folder
+nano coverage_stats.sh
+
+#paste this
+#!/bin/bash
+
+# ========== SETTINGS ==========
+GENOME="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed/bam_files/GCA_000183665.1_ASM18366v1_genomic.fna"
+
+
+OUT="coverage_full_summary.tsv"
+PLOT_DATA="coverage_plot_data.tsv"
+
+echo -e "Sample\tAvg_Cov\tPctCov1\tPctCov10\tPctCov20" > $OUT
+echo -e "Sample\tAvg_Cov\tPctCov1" > $PLOT_DATA
+
+# get genome length
+GENOME_LEN=$(grep -v ">" $GENOME | wc -m)
+echo "Genome length = $GENOME_LEN bp"
+
+for BAM in *.bam; do
+    SAMPLE=$(basename "$BAM" .bam)
+
+    echo "Processing $SAMPLE ..."
+
+    # depth file
+    DEPTH="${SAMPLE}.depth"
+
+    # compute depth
+    samtools depth "$BAM" > "$DEPTH"
+
+    # compute stats
+    read AVG C1 C10 C20 POS <<< $(awk -v L=$GENOME_LEN '
+        { sum += $3; if($3>0) pos++; if($3>=1) c1++; if($3>=10) c10++; if($3>=20) c20++; }
+        END {
+            avg = (NR>0 ? sum/NR : 0);
+            printf "%.4f %.0f %.0f %.0f %.0f", avg, c1, c10, c20, pos;
+        }
+    ' "$DEPTH")
+
+    PCT1=$(echo "scale=2; ($C1/$GENOME_LEN)*100" | bc)
+    PCT10=$(echo "scale=2; ($C10/$GENOME_LEN)*100" | bc)
+    PCT20=$(echo "scale=2; ($C20/$GENOME_LEN)*100" | bc)
+
+    echo -e "$SAMPLE\t$AVG\t$PCT1\t$PCT10\t$PCT20" >> $OUT
+    echo -e "$SAMPLE\t$AVG\t$PCT1" >> $PLOT_DATA
+
+done
+
+echo "Done!"
+echo "Saved summary to $OUT"
+echo "Saved plot data to $PLOT_DATA"
+
+
+#2. Make it executable
+chmod +x coverage_stats.sh
+
+
+#Run it
+
+./coverage_stats.sh
+

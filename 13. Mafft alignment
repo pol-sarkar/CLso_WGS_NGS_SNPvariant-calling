@@ -1,0 +1,101 @@
+#!/bin/bash
+#============================================
+# Liberibacter Core SNP Pipeline (iTOL-ready)
+#============================================
+
+# Activate environment
+conda activate bcf_mafft_env
+
+#-----------------------------
+# Directories and reference
+#-----------------------------
+CONS_DIR=~/shared/labprojects/WGS-Liberibacter-Pol/bam/consensus_fastas
+OUT_DIR=~/shared/labprojects/WGS-Liberibacter-Pol/bam
+REF=~/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCF_000183665.1/GCF_000183665.1_ASM18366v1_genomic.fna
+
+mkdir -p "$OUT_DIR/consensus_filtered_fastas"
+
+#-----------------------------
+# Step 0: Cleanup old concatenated files
+#-----------------------------
+rm -f "$OUT_DIR/all_samples_unique.fasta"
+rm -f "$OUT_DIR/core_genome_alignment_filtered.fasta"
+
+#-----------------------------
+# Step 1: Merge VCFs
+#-----------------------------
+cd "$CONS_DIR" || exit
+ls *.vcf.gz | grep -v 'Undetermined' > vcf_list.txt
+bcftools merge -m all -Oz -o "$OUT_DIR/liberibacter_snps.vcf.gz" -l vcf_list.txt
+bcftools index "$OUT_DIR/liberibacter_snps.vcf.gz"
+
+#-----------------------------
+# Step 2: Filter SNPs
+#-----------------------------
+bcftools view -m2 -M2 -v snps "$OUT_DIR/liberibacter_snps.vcf.gz" | \
+bcftools filter -e 'QUAL<30 || DP<10' -Oz -o "$OUT_DIR/snps.filtered.vcf.gz"
+bcftools index "$OUT_DIR/snps.filtered.vcf.gz"
+
+#-----------------------------
+# Step 3: Remove excluded samples
+#-----------------------------
+EXCLUDE="F_S6,S_S19"
+if [ -n "$EXCLUDE" ]; then
+    bcftools view -s "^$EXCLUDE" -Oz -o "$OUT_DIR/snps.filtered.kept.vcf.gz" "$OUT_DIR/snps.filtered.vcf.gz"
+    bcftools index "$OUT_DIR/snps.filtered.kept.vcf.gz"
+    VCF_TO_USE="$OUT_DIR/snps.filtered.kept.vcf.gz"
+else
+    VCF_TO_USE="$OUT_DIR/snps.filtered.vcf.gz"
+fi
+
+#-----------------------------
+# Step 4: Generate consensus FASTAs
+#-----------------------------
+# Reference first
+REF_BASENAME=$(basename "$REF" .fna)
+REF_SAFE=$(echo "$REF_BASENAME" | tr -c '[:alnum:]_' '_')  # iTOL-safe
+cp "$REF" "$OUT_DIR/consensus_filtered_fastas/${REF_SAFE}.fasta"
+sed -i "1s/.*/>${REF_SAFE}/" "$OUT_DIR/consensus_filtered_fastas/${REF_SAFE}.fasta"
+
+# Consensus for each sample
+for SAMPLE in $(bcftools query -l "$VCF_TO_USE"); do
+    echo "Generating consensus for $SAMPLE"
+    bcftools consensus -f "$REF" -s "$SAMPLE" "$VCF_TO_USE" > "$OUT_DIR/consensus_filtered_fastas/${SAMPLE}.fasta"
+    # Rename header iTOL-safe
+    SAMPLE_SAFE=$(echo "$SAMPLE" | tr -c '[:alnum:]_' '_')
+    sed -i "1s/.*/>${SAMPLE_SAFE}/" "$OUT_DIR/consensus_filtered_fastas/${SAMPLE}.fasta"
+done
+
+#-----------------------------
+# Step 5: Concatenate all FASTAs
+#-----------------------------
+cd "$OUT_DIR/consensus_filtered_fastas" || exit
+cat *.fasta > "$OUT_DIR/all_samples_unique.fasta"
+
+#-----------------------------
+# Step 6: Check for duplicate headers
+#-----------------------------
+DUPS=$(grep ">" "$OUT_DIR/all_samples_unique.fasta" | sort | uniq -d)
+if [ -n "$DUPS" ]; then
+    echo "Error: Duplicate FASTA headers detected:"
+    echo "$DUPS"
+    echo "Please fix these before running IQ-TREE."
+    exit 1
+else
+    echo "No duplicate FASTA headers detected."
+fi
+
+#-----------------------------
+# Step 7: Align with MAFFT
+#-----------------------------
+mafft --auto --thread 6 "$OUT_DIR/all_samples_unique.fasta" > "$OUT_DIR/core_genome_alignment_filtered.fasta"
+
+#-----------------------------
+# Step 8: Build phylogenetic tree with IQ-TREE
+#-----------------------------
+iqtree -s "$OUT_DIR/core_genome_alignment_filtered.fasta" -m GTR+G -B 1000 -T AUTO --prefix "$OUT_DIR/Liberibacter_coreGenome_filtered"
+
+echo "Pipeline completed successfully! Files ready for iTOL:"
+echo "  - Tree file: $OUT_DIR/Liberibacter_coreGenome_filtered.treefile"
+echo "  - Consensus tree: $OUT_DIR/Liberibacter_coreGenome_filtered.contree"
+echo "  - Log: $OUT_DIR/Liberibacter_coreGenome_filtered.log"

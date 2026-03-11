@@ -1,0 +1,249 @@
+VCF to Fasta+ZC1 to IQ tree to itol 
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -----------------------------
+# USER SETTINGS
+# -----------------------------
+WORKDIR="/bigdata/maucklab/shared/labprojects/WGS-Liberibacter-Pol/bam/variants"
+VCF="filtered_noUndet.noFS.SNPonly.vcf.gz"   # <-- final SNP-only VCF
+PREFIX="samples_noUndet_noFS_plus_ZC1_coreSNP"  # output prefix
+OUTDIR="SNP_TREE"
+
+# -----------------------------
+# GO
+# -----------------------------
+cd "$WORKDIR"
+mkdir -p "$OUTDIR"
+
+echo ">>> Checking tools..."
+command -v bcftools >/dev/null 2>&1 || { echo "ERROR: bcftools not found. Activate your bcf_mafft_env."; exit 1; }
+command -v iqtree   >/dev/null 2>&1 || { echo "ERROR: iqtree not found. Activate the env that has iqtree (your bcf_mafft_env worked before)."; exit 1; }
+
+echo ">>> Checking input VCF..."
+test -f "$VCF" || { echo "ERROR: cannot find $VCF in $WORKDIR"; exit 1; }
+
+echo ">>> Indexing VCF if needed..."
+bcftools index -f "$VCF"
+
+echo ">>> Building SNP-only FASTA with ZC1 (= REF at each site)..."
+python3 - <<'PY'
+import subprocess
+
+VCF = "filtered_noUndet.noFS.SNPonly.vcf.gz"
+OUT = "samples_noUndet_noFS_plus_ZC1.coreSNP.SNPonly.fixed.fa"
+
+samples = subprocess.check_output(["bcftools","query","-l",VCF], text=True).split()
+
+# Each record: REF ALT then GTs
+cmd = ["bcftools","query","-f","%REF\t%ALT[\t%GT]\n", VCF]
+lines = subprocess.check_output(cmd, text=True).splitlines()
+
+seqs = {s: [] for s in samples}
+zc1  = []
+
+for ln in lines:
+  parts = ln.split("\t")
+ref = parts[0].upper()
+alt = parts[1].upper() if len(parts) > 1 else ""
+gts = parts[2:]
+
+# ZC1 = reference base at each SNP site
+zc1.append(ref)
+
+# first alt only
+alt1 = alt.split(",")[0] if alt else "N"
+
+for s, gt in zip(samples, gts):
+  gt = gt.replace("|","/")
+if gt in ("0/0","0"):
+  base = ref
+elif gt in ("1/1","1"):
+  base = alt1
+else:
+  base = "N"
+if len(base) != 1:
+  base = "N"
+seqs[s].append(base)
+
+L = len(zc1)
+with open(OUT, "w") as f:
+  f.write(">ZC1\n" + "".join(zc1) + "\n")
+for s in samples:
+  f.write(f">{s}\n" + "".join(seqs[s]) + "\n")
+
+print("WROTE", OUT)
+print("tips", 1 + len(samples), "sites", L)
+PY
+
+echo ">>> Confirm all FASTA sequences have same length..."
+awk 'BEGIN{RS=">";FS="\n"} NR>1{
+  h=$1; seq="";
+  for(i=2;i<=NF;i++) seq=seq $i;
+  gsub(/[ \r\n]/,"",seq);
+  print h"\t"length(seq)
+}' samples_noUndet_noFS_plus_ZC1.coreSNP.SNPonly.fixed.fa \
+| sort -k2,2n | tail -n 5
+
+echo ">>> Running IQ-TREE (ModelFinder + UFboot + aLRT)..."
+iqtree -s samples_noUndet_noFS_plus_ZC1.coreSNP.SNPonly.fixed.fa \
+-m MFP -B 1000 -alrt 1000 -T AUTO \
+-pre "${OUTDIR}/${PREFIX}"
+
+echo ">>> Extracting ML distance matrix (IQ-TREE .mldist) to TSV..."
+# IQ-TREE writes ${PREFIX}.mldist (space-separated with rownames)
+# Convert to clean tab-delimited with header
+python3 - <<'PY'
+import pandas as pd
+
+mld = "SNP_TREE/samples_noUndet_noFS_plus_ZC1_coreSNP.mldist"
+out = "SNP_TREE/SNP_distance_matrix.tsv"
+
+# mldist is whitespace separated, first column rownames
+df = pd.read_csv(mld, sep=r"\s+", engine="python", header=0, index_col=0)
+df.to_csv(out, sep="\t")
+print("WROTE", out, df.shape)
+PY
+
+echo ">>> Computing per-sample SNPs vs ZC1 with valid/missing sites..."
+python3 - <<'PY'
+from collections import OrderedDict
+
+FA = "samples_noUndet_noFS_plus_ZC1.coreSNP.SNPonly.fixed.fa"
+OUT = "SNP_TREE/SNPs_vs_ZC1_trueCounts.tsv"
+
+def read_fasta(path):
+  seqs = OrderedDict()
+name = None
+buf = []
+with open(path) as f:
+  for line in f:
+  line=line.strip()
+if not line: 
+  continue
+if line.startswith(">"):
+  if name is not None:
+  seqs[name] = "".join(buf).upper()
+name = line[1:].split()[0]
+buf=[]
+else:
+  buf.append(line)
+if name is not None:
+  seqs[name] = "".join(buf).upper()
+return seqs
+
+seqs = read_fasta(FA)
+ref = seqs["ZC1"]
+L = len(ref)
+
+def good(b): 
+  return b in ("A","C","G","T")
+
+rows=[]
+for s, x in seqs.items():
+  if s=="ZC1": 
+  continue
+ok = [i for i,(r,xi) in enumerate(zip(ref,x)) if good(r) and good(xi)]
+valid = len(ok)
+snps = sum(1 for i in ok if x[i]!=ref[i])
+missing = L - valid
+rows.append((s, snps, valid, missing))
+
+# sort by SNPs desc
+rows.sort(key=lambda t: t[1], reverse=True)
+
+with open(OUT,"w") as f:
+  f.write("sample\tSNPs_vs_ZC1\tvalid_sites\tmissing_sites\n")
+for r in rows:
+  f.write("%s\t%d\t%d\t%d\n" % r)
+
+print("WROTE", OUT, "rows", len(rows), "sites", L)
+PY
+
+echo ">>> Creating iTOL TEXT dataset for SNP numbers (no bars)..."
+python3 - <<'PY'
+import pandas as pd
+
+inp = "SNP_TREE/SNPs_vs_ZC1_trueCounts.tsv"
+out = "SNP_TREE/itol_ZC1_SNPcounts_TEXT.txt"
+
+df = pd.read_csv(inp, sep="\t")
+
+with open(out,"w") as f:
+  f.write("DATASET_TEXT\n")
+f.write("SEPARATOR\tTAB\n")
+f.write("DATASET_LABEL\tSNPs_vs_ZC1\n")
+f.write("COLOR\t#000000\n")
+f.write("DATA\n")
+for _,r in df.iterrows():
+  f.write(f"{r['sample']}\t{int(r['SNPs_vs_ZC1'])}\n")
+
+print("WROTE", out)
+PY
+
+echo ">>> Creating iTOL TEXT dataset for (SNP|valid|missing)..."
+python3 - <<'PY'
+import pandas as pd
+
+inp = "SNP_TREE/SNPs_vs_ZC1_trueCounts.tsv"
+out = "SNP_TREE/itol_ZC1_counts_TEXT3.txt"
+
+df = pd.read_csv(inp, sep="\t")
+
+with open(out,"w") as f:
+  f.write("DATASET_TEXT\n")
+f.write("SEPARATOR\tTAB\n")
+f.write("DATASET_LABEL\tZC1_counts\n")
+f.write("COLOR\t#000000\n")
+f.write("DATA\n")
+for _,r in df.iterrows():
+  lab = f"{int(r['SNPs_vs_ZC1'])} | {int(r['valid_sites'])} | {int(r['missing_sites'])}"
+f.write(f"{r['sample']}\t{lab}\n")
+
+print("WROTE", out)
+PY
+
+echo ">>> Creating iTOL BAR dataset (since you said it works well)..."
+python3 - <<'PY'
+import pandas as pd
+
+inp = "SNP_TREE/SNPs_vs_ZC1_trueCounts.tsv"
+out = "SNP_TREE/itol_SNPs_vs_ZC1_BAR.txt"
+
+df = pd.read_csv(inp, sep="\t")
+
+# iTOL SIMPLEBAR is supported widely; numbers show on the bar
+with open(out,"w") as f:
+  f.write("DATASET_SIMPLEBAR\n")
+f.write("SEPARATOR\tTAB\n")
+f.write("DATASET_LABEL\tSNPs_vs_ZC1\n")
+f.write("COLOR\t#4C78A8\n")
+f.write("FIELD_LABELS\tSNPs\n")
+f.write("DATA\n")
+for _,r in df.iterrows():
+  f.write(f"{r['sample']}\t{int(r['SNPs_vs_ZC1'])}\n")
+
+print("WROTE", out)
+PY
+
+echo ">>> DONE."
+echo
+echo "Tree files:"
+echo "  ${OUTDIR}/${PREFIX}.contree     (consensus tree with supports)"
+echo "  ${OUTDIR}/${PREFIX}.treefile    (ML tree)"
+echo
+echo "Distance matrix:"
+echo "  SNP_TREE/SNP_distance_matrix.tsv"
+echo
+echo "Per-sample SNP counts vs ZC1:"
+echo "  SNP_TREE/SNPs_vs_ZC1_trueCounts.tsv"
+echo
+echo "iTOL datasets:"
+echo "  SNP_TREE/itol_ZC1_SNPcounts_TEXT.txt     (numbers only)"
+echo "  SNP_TREE/itol_ZC1_counts_TEXT3.txt       (SNP|valid|missing)"
+echo "  SNP_TREE/itol_SNPs_vs_ZC1_BAR.txt        (bar + numbers)"
+-----------------------------------------------------------------
+  ----------------------------------------------
+#Run it
+  bash run_ZC1_coreSNP_pipeline.sh

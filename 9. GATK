@@ -1,0 +1,156 @@
+cd /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam
+
+
+#activate the env
+source ~/.bashrc
+conda activate gatk_env
+
+#From the trimmed directory
+nano /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed/run_gatk_alignment_pipeline.sh
+#pastethis:
+#!/usr/bin/env bash
+set -euo pipefail
+
+#################################################
+# USER PATHS (EDIT ONLY IF YOUR PATHS CHANGE)
+#################################################
+
+TRIMMED_DIR="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed"
+REF_DIR="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCF_000183665.1"
+REF_FASTA="GCF_000183665.1_ASM18366v1_genomic.fna"
+BAM_DIR="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam"
+THREADS=6
+
+#################################################
+# TOOL CHECK
+#################################################
+
+echo "✅ Checking required tools..."
+
+for tool in bwa samtools gatk gzip; do
+    if ! command -v $tool &> /dev/null; then
+        echo "❌ ERROR: $tool not found in PATH"
+        exit 1
+    fi
+done
+
+echo "✅ All tools found."
+
+#################################################
+# CHECK GZIP INTEGRITY (FIRST SAMPLE ONLY)
+#################################################
+
+cd "$TRIMMED_DIR"
+
+echo "✅ Checking FASTQ integrity on first sample..."
+
+gzip -t A_S1_R1_trimmed.fastq.gz || { echo "❌ R1 gzip corrupted"; exit 1; }
+gzip -t A_S1_R2_trimmed.fastq.gz || { echo "❌ R2 gzip corrupted"; exit 1; }
+
+echo "✅ FASTQ files are valid."
+
+#################################################
+# PREPARE OUTPUT DIR
+#################################################
+
+mkdir -p "$BAM_DIR"
+
+#################################################
+# PREPARE REFERENCE (SAFE MODE)
+#################################################
+
+cd "$REF_DIR"
+
+if [ ! -f "${REF_FASTA}.fai" ]; then
+    echo "✅ Creating samtools index..."
+    samtools faidx "$REF_FASTA"
+else
+    echo "✅ samtools index already exists."
+fi
+
+DICT="${REF_FASTA%.fna}.dict"
+if [ ! -f "$DICT" ]; then
+    echo "✅ Creating GATK sequence dictionary..."
+    gatk CreateSequenceDictionary -R "$REF_FASTA" -O "$DICT"
+else
+    echo "✅ GATK dictionary already exists."
+fi
+
+if [ ! -f "${REF_FASTA}.bwt" ]; then
+    echo "✅ Creating BWA index..."
+    bwa index "$REF_FASTA"
+else
+    echo "✅ BWA index already exists."
+fi
+
+#################################################
+# ALIGNMENT + MARK DUPLICATES (ALL SAMPLES)
+#################################################
+
+cd "$TRIMMED_DIR"
+
+echo "✅ Starting full GATK-ready alignment pipeline..."
+
+for R1 in *_R1_trimmed.fastq.gz; do
+
+    base=$(basename "$R1" _R1_trimmed.fastq.gz)
+    R2="${base}_R2_trimmed.fastq.gz"
+
+    echo "======================================"
+    echo "🚀 Processing sample: $base"
+    echo "======================================"
+
+    #################################################
+    # BWA ALIGN + SORT
+    #################################################
+
+    bwa mem -t $THREADS \
+    -R "@RG\tID:${base}\tSM:${base}\tPL:ILLUMINA\tLB:lib1\tPU:unit1" \
+    "$REF_DIR/$REF_FASTA" \
+    "$R1" "$R2" | \
+    samtools sort -@ $THREADS -o "$BAM_DIR/${base}.sorted.bam"
+
+    #################################################
+    # INDEX SORTED BAM
+    #################################################
+
+    samtools index "$BAM_DIR/${base}.sorted.bam"
+
+    #################################################
+    # MARK DUPLICATES (GATK)
+    #################################################
+
+    gatk MarkDuplicates \
+        -I "$BAM_DIR/${base}.sorted.bam" \
+        -O "$BAM_DIR/${base}.markdup.bam" \
+        -M "$BAM_DIR/${base}.dup_metrics.txt" \
+        --CREATE_INDEX true
+
+    #################################################
+    # VALIDATE BAM
+    #################################################
+
+    gatk ValidateSamFile \
+        -I "$BAM_DIR/${base}.markdup.bam" \
+        --MODE SUMMARY
+
+    echo "✅ Finished: $base"
+
+done
+
+echo "🎉🎉🎉 ALL SAMPLES SUCCESSFULLY ALIGNED & GATK-READY 🎉🎉🎉"
+---------------------------------------------------
+
+#make it executable
+chmod +x run_gatk_alignment_pipeline.sh
+
+#Run it
+./run_gatk_alignment_pipeline.sh
+
+
+ls /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam
+
+#confirm all samples have bam
+ls *.markdup.bam | wc -l
+# only use : *.markdup.bam
+

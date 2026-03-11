@@ -1,0 +1,91 @@
+#Recommended SNP matrix command
+  #for PCA do this
+  bcftools query \
+-f '%CHROM\t%POS[\t%IUPACGT]\n' \
+variants/core_snps.vcf.gz \
+> variants/core_snp_matrix_iupac.tsv
+
+
+#activate the env
+conda activate gatk_env
+#confirm the tools
+which samtools
+which bcftools
+#Check what exists
+ls variants
+
+----------------------------------------------
+#create this script
+nano make_core_snp_fasta.sh
+
+#paste
+#!/usr/bin/env bash
+set -euo pipefail
+
+VCF="variants/core_snps.vcf.gz"
+MATRIX="variants/core_snp_matrix_iupac.tsv"
+OUT_FASTA="variants/core_snps_alignment.fasta"
+
+echo "🧬 Converting core SNP matrix to FASTA alignment..."
+
+awk '
+BEGIN {
+    FS = "\t"
+}
+{
+    for (i = 3; i <= NF; i++) {
+        base = $i
+        if (base == "." || base == "") base = "N"
+        if (length(base) > 1) base = substr(base, 1, 1)
+        seq[i] = seq[i] base
+    }
+}
+END {
+    cmd = "bcftools query -l '"$VCF"'"
+    n = 0
+    while ((cmd | getline name) > 0) {
+        sample[++n] = name
+    }
+    close(cmd)
+
+    for (i = 3; i <= 3 + n - 1; i++) {
+        print ">" sample[i-2]
+        print seq[i]
+    }
+}
+' "$MATRIX" > "$OUT_FASTA"
+
+echo "✅ FASTA written to $OUT_FASTA"
+----------------------------------------------------------------
+
+#make it executable
+chmod +x make_core_snp_fasta.sh
+#Run it
+./make_core_snp_fasta.sh
+--------------------------------------
+#verify
+grep -c '^>' variants/core_snps_alignment.fasta
+
+#check
+awk 'NR==2{print length($0)}' variants/core_snps_alignment.fasta
+-------------------------------------------
+-------------------------------------------------
+
+#Install IQ-Tree
+conda activate gatk_env
+conda install -c bioconda -c conda-forge iqtree
+
+#Run IQ-Tree
+cd variants
+
+which iqtree
+iqtree --version
+
+cd /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam/variants
+
+iqtree \
+  -s core_snps_alignment.fasta \
+  -m GTR+G \
+  -B 1000 \
+  -T AUTO \
+  --prefix Liberibacter_coreSNP

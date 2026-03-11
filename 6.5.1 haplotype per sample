@@ -1,0 +1,48 @@
+#Generate haplotypes per sample and shared haplotypes
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT[\t%GT]\n' WGS_results/all_samples_filtered_snps.vcf.gz > haplotype_matrix.tsv
+
+#check coverage per sample
+samtools depth -a A_S1_sorted.bam | awk '{sum+=$3; cnt++} END {print "A_S1 avg depth:", sum/cnt}'
+
+---------------------------------------
+
+Then in R,Collapse each sample’s genotypes into a single haplotype string
+Count unique haplotypes
+List samples sharing each haplotype
+
+library(dplyr)
+library(readr)
+
+# Read haplotype matrix
+geno <- read_tsv("haplotype_matrix.tsv", col_names = FALSE)
+
+# Rename first 4 columns
+colnames(geno)[1:4] <- c("CHROM","POS","REF","ALT")
+
+# Sample columns
+sample_cols <- colnames(geno)[5:ncol(geno)]
+
+# Collapse SNP genotypes into haplotype strings
+haplotypes <- apply(geno[, sample_cols], 2, function(x) paste(x, collapse="|"))
+
+# Convert to data.frame
+hap_df <- data.frame(
+  Sample = names(haplotypes),
+  Haplotype = haplotypes,
+  stringsAsFactors = FALSE
+)
+
+# Count how many samples share each haplotype
+hap_summary <- hap_df %>%
+  group_by(Haplotype) %>%
+  summarise(
+    Count = n(),
+    Samples = paste(Sample, collapse=", ")
+  ) %>%
+  arrange(desc(Count))
+
+# Save results
+write.table(hap_summary, "haplotype_summary.tsv", sep="\t", row.names = FALSE, quote = FALSE)
+
+# Inspect
+print(hap_summary)

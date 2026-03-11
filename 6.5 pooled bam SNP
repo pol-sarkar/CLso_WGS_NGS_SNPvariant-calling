@@ -1,0 +1,48 @@
+# Go to the folder with your BAM and FASTA files
+cd /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed/bam_files/
+
+#Check how many reads actually map to the CLso genome in each BAM:
+samtools view -c -F 4 .bam
+
+
+#Ensure BAM files are ready
+ls *.bam
+
+#load samtools
+module load samtools/1.17
+
+module load samtools
+module load bcftools
+
+# Step 1: Index the reference FASTA (if not done already)
+samtools faidx GCF_000183665.1_ASM18366v1_genomic.fna
+
+# Step 2: Call SNPs using bcftools mpileup + call
+bcftools mpileup -f GCF_000183665.1_ASM18366v1_genomic.fna Undetermined_S0_sorted.bam -Ou -a AD,DP | \
+bcftools call -mv -Oz -o liberibacter_snps.vcf.gz
+
+# Step 3: Filter for positions with coverage >5 reads
+bcftools filter -i 'INFO/DP>5' liberibacter_snps.vcf.gz -Oz -o liberibacter_snps_filtered.vcf.gz
+
+
+# Step 4: Index the final VCF
+bcftools index liberibacter_snps_filtered.vcf.gz
+
+# Step 5: Check the number of SNPs
+bcftools view liberibacter_snps_filtered.vcf.gz | grep -v "^#" | wc -l
+
+
+#View the first 20 lines including headers:
+zcat liberibacter_snps_filtered.vcf.gz | head -n 20
+
+
+#View only variant lines (exclude headers):
+zcat liberibacter_snps_filtered.vcf.gz | grep -v "^#" | head
+
+
+#Inspect SNP
+bcftools view liberibacter_snps_filtered.vcf.gz | head
+
+
+#get a table of SNPs with allele counts:
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%DP\t[%AD]\n' liberibacter_snps_filtered.vcf.gz > liberibacter_snps_filtered.tsv

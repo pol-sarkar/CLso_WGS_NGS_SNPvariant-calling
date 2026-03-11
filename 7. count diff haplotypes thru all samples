@@ -1,0 +1,158 @@
+# =======================================
+# Haplotype analysis with consensus of replicates
+# Corrected & biologically valid version
+# =======================================
+
+setwd("/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed/bam_files/WGS_results/")
+
+library(tidyverse)
+
+# ----------------------------
+# 1. Read genotype data
+# ----------------------------
+# Expected format:
+# CHROM  POS  REF  ALT  sample1 sample2 sample3 ...
+geno <- read_tsv("merged_samples_genotypes.tsv", col_names = FALSE)
+
+# Rename fixed columns
+colnames(geno)[1:4] <- c("CHROM", "POS", "REF", "ALT")
+
+# Extract sample columns
+sample_cols <- colnames(geno)[5:ncol(geno)]
+
+# ----------------------------
+# 2. Convert genotypes to nucleotides (BIOLOGICALLY CORRECT)
+# ----------------------------
+geno_clean <- geno %>%
+  mutate(across(all_of(sample_cols), ~ case_when(
+    . %in% c("./.", ".") ~ NA_character_,  # missing
+    . == "0/0" ~ REF,                      # reference allele
+    . == "1/1" ~ ALT,                      # alternate allele
+    . == "0/1" ~ "N",                      # mixed population
+    TRUE ~ NA_character_
+  )))
+
+# ----------------------------
+# 3. Define biological replicates
+# ⚠️ ADJUST these names to match your real column names
+# ----------------------------
+replicate_map <- list(
+  Sample1 = c("X5", "X6", "X7"),      # A, B, C
+  Sample2 = c("X8", "X9", "X10"),     # D, E, F
+  Sample3 = c("X11", "X12"),          # G, H
+  Sample4 = c("X13", "X14", "X15"),   # I, J, K
+  Sample5 = c("X16", "X17", "X18"),   # L, M, N
+  Sample6 = c("X19", "X20", "X21"),   # O, P, Q
+  Sample7 = c("X22", "X23")           # R, S
+)
+
+# ----------------------------
+# 4. Collapse replicates into strict consensus
+# ----------------------------
+consensus_list <- lapply(names(replicate_map), function(bio_sample) {
+
+  runs <- replicate_map[[bio_sample]]
+  geno_subset <- geno_clean[, runs]
+
+  consensus <- apply(geno_subset, 1, function(x) {
+    x <- na.omit(x)
+    if (length(x) == 0) return(NA)              # all missing
+    if (length(unique(x)) == 1) return(x[1])   # perfect agreement
+    return(NA)                                 # conflict → discard
+  })
+
+  return(consensus)
+})
+
+# Combine into final consensus table
+geno_consensus <- data.frame(
+  CHROM = geno_clean$CHROM,
+  POS   = geno_clean$POS,
+  REF   = geno_clean$REF,
+  ALT   = geno_clean$ALT,
+  as.data.frame(consensus_list)
+)
+
+# Set correct biological sample names
+colnames(geno_consensus)[5:ncol(geno_consensus)] <- names(replicate_map)
+
+# ----------------------------
+# 5. Compute non-missing fraction per sample
+# ----------------------------
+coverage_fraction <- colSums(!is.na(geno_consensus[, names(replicate_map)])) /
+                     nrow(geno_consensus)
+
+coverage_fraction <- data.frame(
+  Sample = names(coverage_fraction),
+  Fraction_non_missing = coverage_fraction
+)
+
+print("Fraction of non-missing genotypes per sample:")
+print(coverage_fraction)
+
+# ----------------------------
+# 6. Filter low-coverage samples
+# ----------------------------
+min_fraction <- 0.10   # 10% genome minimum
+
+good_samples <- coverage_fraction$Sample[
+  coverage_fraction$Fraction_non_missing >= min_fraction
+]
+
+print("Samples passing coverage threshold:")
+print(good_samples)
+
+geno_filtered <- geno_consensus[, c("CHROM", "POS", "REF", "ALT", good_samples)]
+
+# ----------------------------
+# 7. Create haplotypes (site-separated)
+# ----------------------------
+sample_cols_filtered <- colnames(geno_filtered)[5:ncol(geno_filtered)]
+
+hap_df <- data.frame(
+  Sample = sample_cols_filtered,
+  Haplotype = apply(
+    geno_filtered[, sample_cols_filtered],
+    2,
+    function(x) paste(x, collapse = "|")   # keeps sites readable
+  )
+)
+
+# ----------------------------
+# 8. Summarize haplotypes
+# ----------------------------
+hap_summary <- hap_df %>%
+  group_by(Haplotype) %>%
+  summarise(
+    Count = n(),
+    Samples = paste(Sample, collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Count))
+
+print("Haplotype summary:")
+print(hap_summary)
+
+# ----------------------------
+# 9. Save results
+# ----------------------------
+write.table(
+  hap_summary,
+  "haplotype_consensus_summary.tsv",
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+
+write.table(
+  geno_filtered,
+  "haplotype_consensus_matrix.tsv",
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+
+cat("\n✅ Haplotype analysis complete.\n")
+cat("Saved files:\n")
+cat(" - haplotype_consensus_summary.tsv\n")
+cat(" - haplotype_consensus_matrix.tsv\n")

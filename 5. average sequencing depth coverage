@@ -1,0 +1,39 @@
+create the file 
+nano coverage_fixed.sh
+
+
+#!/bin/bash
+
+# Directory containing your BAM files
+bam_dir="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed/bam_files"
+
+# Output file (saved in bam_dir)
+out="${bam_dir}/coverage_summary_fixed.tsv"
+
+# Write header
+echo -e "Sample\tAverage_Coverage" > "$out"
+
+# Loop through all sorted BAM files
+find "$bam_dir" -maxdepth 1 -name "*_sorted.bam" | sort | while read -r bam
+do
+    sample=$(basename "$bam" _sorted.bam)
+    echo "Processing $sample ..."
+
+    # Calculate average coverage
+    avg_cov=$(samtools depth -a "$bam" | \
+              awk '{sum+=$3} END {if (NR>0) print sum/NR; else print 0}')
+
+    # Append to output file
+    echo -e "${sample}\t${avg_cov}" >> "$out"
+done
+
+echo "Done! Results saved in: $out"
+-------------------
+
+#execute the file
+chmod +x coverage_fixed.sh
+#Load samtools if not already loaded:
+module load samtools
+#Run the script
+./coverage_fixed.sh
+

@@ -1,0 +1,158 @@
+# ============================================
+# Haplotype Consensus Analysis (MAJORITY RULE)
+# ============================================
+
+setwd("/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed/bam_files/WGS_results/")
+
+library(tidyverse)
+
+# ----------------------------
+# 1. Read genotype data
+# ----------------------------
+geno <- read_tsv("merged_samples_genotypes.tsv", col_names = FALSE)
+
+colnames(geno)[1:4] <- c("CHROM", "POS", "REF", "ALT")
+
+sample_cols <- colnames(geno)[5:ncol(geno)]
+
+# ----------------------------
+# 2. Clean genotypes
+# ----------------------------
+geno_clean <- geno %>%
+  mutate(across(all_of(sample_cols),
+                ~ ifelse(. %in% c("./.", ".", "N"), NA, .)))
+
+# ----------------------------
+# 3. Define biological replicates
+# ----------------------------
+replicate_map <- list(
+  Sample1 = c("X5", "X6", "X7"),
+  Sample2 = c("X8", "X9", "X10"),
+  Sample3 = c("X11", "X12"),
+  Sample4 = c("X13", "X14", "X15"),
+  Sample5 = c("X16", "X17", "X18"),
+  Sample6 = c("X19", "X20", "X21"),
+  Sample7 = c("X22", "X23")
+)
+
+# ----------------------------
+# 4. Collapse replicates using MAJORITY RULE
+# ----------------------------
+consensus_list <- lapply(names(replicate_map), function(bio_sample) {
+
+  runs <- replicate_map[[bio_sample]]
+  geno_subset <- geno_clean[, runs, drop = FALSE]
+
+  consensus <- apply(geno_subset, 1, function(x) {
+
+    x <- na.omit(x)
+    if (length(x) == 0) return(NA)
+
+    tbl <- table(x)
+    major <- names(tbl)[which.max(tbl)]
+
+    if (max(tbl) / sum(tbl) >= 0.6) {
+      return(major)
+    } else {
+      return(NA)
+    }
+  })
+
+  return(consensus)
+})
+
+# ----------------------------
+# 5. Build consensus genotype table
+# ----------------------------
+geno_consensus <- data.frame(
+  CHROM = geno_clean$CHROM,
+  POS   = geno_clean$POS,
+  REF   = geno_clean$REF,
+  ALT   = geno_clean$ALT,
+  as.data.frame(consensus_list)
+)
+
+colnames(geno_consensus)[5:ncol(geno_consensus)] <- names(replicate_map)
+
+# ----------------------------
+# 6. Coverage filtering
+# ----------------------------
+coverage_fraction <- colSums(!is.na(geno_consensus[, names(replicate_map)])) / nrow(geno_consensus)
+
+coverage_fraction <- data.frame(
+  Sample = names(coverage_fraction),
+  Fraction_non_missing = coverage_fraction
+)
+
+write.table(coverage_fraction,
+            "sample_coverage_fraction.tsv",
+            sep = "\t",
+            row.names = FALSE,
+            quote = FALSE)
+
+print("Coverage fractions:")
+print(coverage_fraction)
+
+# Keep samples with ≥10% genotype coverage
+min_fraction <- 0.10
+
+good_samples <- coverage_fraction$Sample[
+  coverage_fraction$Fraction_non_missing >= min_fraction
+]
+
+print("Samples passing coverage threshold:")
+print(good_samples)
+
+geno_filtered <- geno_consensus[, c("CHROM", "POS", "REF", "ALT", good_samples)]
+
+# ----------------------------
+# 7. Create haplotypes (site-separated)
+# ----------------------------
+sample_cols_filtered <- colnames(geno_filtered)[5:ncol(geno_filtered)]
+
+hap_df <- data.frame(
+  Sample = sample_cols_filtered,
+  Haplotype = apply(
+    geno_filtered[, sample_cols_filtered],
+    2,
+    function(x) paste(x, collapse = "|")
+  )
+)
+
+# ----------------------------
+# 8. Summarize haplotypes
+# ----------------------------
+hap_summary <- hap_df %>%
+  group_by(Haplotype) %>%
+  summarise(
+    Count = n(),
+    Samples = paste(Sample, collapse = ", "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Count))
+
+print("Haplotype summary:")
+print(hap_summary)
+
+# ----------------------------
+# 9. Save all outputs
+# ----------------------------
+write.table(geno_consensus,
+            "geno_consensus_full.tsv",
+            sep = "\t",
+            row.names = FALSE,
+            quote = FALSE)
+
+write.table(geno_filtered,
+            "geno_consensus_filtered.tsv",
+            sep = "\t",
+            row.names = FALSE,
+            quote = FALSE)
+
+write.table(hap_summary,
+            "haplotype_consensus_summary.tsv",
+            sep = "\t",
+            row.names = FALSE,
+            quote = FALSE)
+
+print("✅ All outputs saved successfully.")

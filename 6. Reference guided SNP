@@ -1,0 +1,160 @@
+#go to your working directory
+cd /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed/bam_files
+
+#Check how many reads actually map to the CLso genome in each BAM:
+samtools view -c -F 4 Q_S17_sorted.bam
+
+#Rebuild the VCF properly
+bcftools mpileup -f $REF_FASTA *.bam -Ou -a AD,DP | \
+  bcftools call -mv -Oz -o liberibacter_snps.vcf.gz
+
+
+#confirm the header
+head /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCF_000183665.1/*.fna
+
+#point ref fasta to correct ref file
+export REF_FASTA="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCF_000183665.1/GCF_000183665.1_ASM18366v1_genomic.fna"
+#verify
+realpath $REF_FASTA
+
+
+#Ensure BAM files are ready
+ls *.bam
+
+#load samtools
+module load samtools/1.17
+
+module load samtools
+module load bcftools
+
+
+#You can save the following script or run it individual in the terminal
+nano wgs_snp_haplotype_pipeline.sh
+-------------------
+#!/bin/bash
+set -e
+
+###############################################
+# CONFIGURATION
+###############################################
+
+# Absolute path to your reference genome
+REF="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCF_000183665.1/GCF_000183665.1_ASM18366v1_genomic.fna"
+
+# Output directory
+OUTDIR="WGS_results"
+mkdir -p $OUTDIR
+
+echo "=============================================="
+echo "   WGS SNP CALLING & HAPLOTYPE PIPELINE"
+echo "=============================================="
+echo "Reference genome:"
+echo "$REF"
+echo ""
+sleep 1
+
+
+###############################################
+# STEP 1: Index reference
+###############################################
+
+echo "=== Step 1: Indexing reference genome ==="
+bwa index $REF
+samtools faidx $REF
+echo "Reference indexed."
+echo ""
+
+
+###############################################
+# STEP 2: SNP calling per sample
+###############################################
+
+echo "=== Step 2: Calling SNPs per sample ==="
+
+for BAM in *_sorted.bam; do
+    
+    SAMPLE=$(basename "$BAM" _sorted.bam)
+
+    echo "--------------------------------------"
+    echo "Processing sample: $SAMPLE"
+    echo "--------------------------------------"
+
+    bcftools mpileup \
+        -Ou \
+        -f $REF \
+        -a FORMAT/DP,FORMAT/AD \
+        --min-MQ 20 \
+        --min-BQ 20 \
+        "$BAM" \
+    | bcftools call -mv -Oz -o "$OUTDIR/${SAMPLE}.vcf.gz"
+
+    bcftools index "$OUTDIR/${SAMPLE}.vcf.gz"
+
+    echo "Finished $SAMPLE"
+    echo ""
+done
+
+
+###############################################
+# STEP 3: Merge VCFs
+###############################################
+
+echo "=== Step 3: Merging VCFs ==="
+
+bcftools merge $OUTDIR/*.vcf.gz \
+    -Oz -o $OUTDIR/all_samples_merged.vcf.gz
+
+bcftools index $OUTDIR/all_samples_merged.vcf.gz
+echo "Merged VCF created."
+echo ""
+
+
+###############################################
+# STEP 4: Filter SNPs
+###############################################
+
+echo "=== Step 4: Filtering SNPs ==="
+
+bcftools view \
+    -v snps \
+    -i 'TYPE=\"snp\" && FMT/DP>3' \
+    $OUTDIR/all_samples_merged.vcf.gz \
+    -Oz -o $OUTDIR/all_samples_filtered_snps.vcf.gz
+
+bcftools index $OUTDIR/all_samples_filtered_snps.vcf.gz
+echo "Filtered SNP VCF created."
+echo ""
+
+
+###############################################
+# STEP 5: Create haplotype matrix
+###############################################
+
+echo "=== Step 5: Creating haplotype matrix ==="
+
+bcftools query -f '%POS[\t%GT]\n' \
+    $OUTDIR/all_samples_filtered_snps.vcf.gz \
+    > $OUTDIR/haplotype_matrix.tsv
+
+echo "Haplotype matrix saved to:"
+echo "$OUTDIR/haplotype_matrix.tsv"
+echo ""
+
+
+echo "=============================================="
+echo "                 PIPELINE DONE"
+echo "=============================================="
+
+
+---------------------------------
+
+#check if the script is executable:
+chmod +x wgs_snp_haplotype_pipeline.sh
+
+if no response, good
+
+#Run it
+./wgs_snp_haplotype_pipeline.sh
+
+
+

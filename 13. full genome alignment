@@ -1,0 +1,65 @@
+cd /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam
+
+conda create -n bcf_mafft_env python=3.10 -y
+conda activate bcf_mafft_env
+mamba install -c bioconda -c conda-forge bcftools mafft samtools -y
+
+mamba install -c conda-forge -c bioconda \
+  bcftools=1.17 \
+  samtools \
+  mafft \
+  iqtree \
+  -y
+
+
+
+#create the script
+cd ~/shared/labprojects/WGS-Liberibacter-Pol/bam
+
+nano generate_consensus_fastas.sh
+#paste
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Output directory for consensus FASTAs
+OUTDIR="consensus_fastas"
+mkdir -p "$OUTDIR"
+
+# Reference genome
+REF="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCF_000183665.1/GCF_000183665.1_ASM18366v1_genomic.fna"
+
+# Loop over all markdup BAMs
+for BAM in *.markdup.bam; do
+SAMPLE=$(basename "$BAM" .markdup.bam)
+echo "🚀 Processing $SAMPLE"
+
+# Call variants
+bcftools mpileup -f "$REF" -q 20 -Q 20 -d 400 -Ou "$BAM" | \
+bcftools call -mv -Oz --ploidy 1 -o "$OUTDIR/$SAMPLE.vcf.gz"
+
+# Index VCF
+bcftools index "$OUTDIR/$SAMPLE.vcf.gz"
+
+# Generate consensus FASTA
+bcftools consensus \
+  -f "$REF" \
+  -i 'DP>=5' \
+  "$OUTDIR/$SAMPLE.vcf.gz" \
+  > "$OUTDIR/$SAMPLE.fasta"
+
+
+done
+
+echo "🎉 All consensus FASTAs are in $OUTDIR"
+------------------------------------------
+  chmod +x generate_consensus_fastas.sh
+./generate_consensus_fastas.sh
+----------------------------------------------
+  #align all consensus fasta
+  cd consensus_fastas
+mafft --auto --thread 6 *.fasta > ../core_genome_alignment.fasta
+#build phylogeny with IQtree
+cd ..
+iqtree -s core_genome_alignment.fasta -m GTR+G -B 1000 -T AUTO --prefix Liberibacter_coreGenome
+

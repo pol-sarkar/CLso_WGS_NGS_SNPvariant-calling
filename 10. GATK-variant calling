@@ -1,0 +1,189 @@
+---Variant Calling---
+
+#install vfc tools
+module avail bcftools
+module load bcftools
+module load samtools
+conda activate gatk_env
+
+
+#Create SNP calling script
+  cd /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam
+nano run_bcftools_snps.sh
+
+#paste this:
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+#########################################
+# PATHS
+#########################################
+
+BAM_DIR="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam"
+REF_DIR="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCF_000183665.1"
+REF_FASTA="${REF_DIR}/GCF_000183665.1_ASM18366v1_genomic.fna"
+OUT_DIR="${BAM_DIR}/variants"
+
+#########################################
+# PREP
+#########################################
+
+mkdir -p "$OUT_DIR"
+
+echo "✅ Checking tools..."
+for tool in bcftools samtools; do
+    if ! command -v $tool &>/dev/null; then
+        echo "❌ ERROR: $tool not found"
+        exit 1
+    fi
+done
+echo "✅ Tools OK"
+
+#########################################
+# COLLECT BAM FILES
+#########################################
+
+BAM_LIST=("$BAM_DIR"/*.markdup.bam)
+
+if [ ${#BAM_LIST[@]} -eq 0 ]; then
+    echo "❌ No BAM files found"
+    exit 1
+fi
+
+echo "✅ Found ${#BAM_LIST[@]} BAM files"
+
+#########################################
+# VARIANT CALLING (HAPLOID BACTERIA)
+#########################################
+
+echo "🚀 Calling SNPs (haploid)..."
+
+bcftools mpileup \
+    -f "$REF_FASTA" \
+    -q 20 -Q 20 -d 400 \
+    -Ou \
+    "${BAM_LIST[@]}" | \
+bcftools call \
+    -mv \
+    --ploidy 1 \
+    -Oz \
+    -o "$OUT_DIR/raw_snps.vcf.gz"
+
+#########################################
+# FILTERING
+#########################################
+
+echo "🚀 Filtering SNPs (QUAL>=30, DP>=10)..."
+
+bcftools filter \
+    -e 'QUAL<30 || DP<10' \
+    -Oz \
+    -o "$OUT_DIR/filtered_snps.vcf.gz" \
+    "$OUT_DIR/raw_snps.vcf.gz"
+
+#########################################
+# INDEX
+#########################################
+
+echo "📌 Indexing VCFs..."
+
+bcftools index "$OUT_DIR/raw_snps.vcf.gz"
+bcftools index "$OUT_DIR/filtered_snps.vcf.gz"
+
+echo "🎉 SNP calling finished successfully!"
+echo "📁 Output directory: $OUT_DIR"
+
+
+---------------------------------------------------
+  #Run it
+chmod +x run_bcftools_snps.sh
+./run_bcftools_snps.sh
+
+
+(this should generate:
+  variants/
+├── raw_snps.vcf
+├── raw_snps.vcf.csi
+├── filtered_snps.vcf
+├── filtered_snps.vcf.csi
+)
+  
+  #clean the SNP
+  nano make_snp_matrix.sh
+#paste this:
+#!/usr/bin/env bash
+set -euo pipefail
+
+VCF="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam/variants/filtered_snps.vcf"
+OUT="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/bam/variants/snp_matrix.tsv"
+
+echo "🧬 Creating SNP matrix..."
+bcftools query -f '%CHROM\t%POS[\t%GT]\n' "$VCF" > "$OUT"
+echo "✅ SNP matrix created: $OUT"
+
+---------------------------------------
+
+#Run it:
+chmod +x make_snp_matrix.sh
+./make_snp_matrix.sh
+
+#(This will generate:
+variants/
+├── raw_snps.vcf
+├── raw_snps.vcf.csi
+├── filtered_snps.vcf
+├── filtered_snps.vcf.csi
+└── snp_matrix.tsv
+)
+
+#confirm SNP cpounts
+bcftools view -H variants/filtered_snps.vcf.gz | wc -l
+
+#confirm haploid genotypes
+bcftools query -f '[%GT\t]\n' variants/filtered_snps.vcf.gz | head
+
+#remove the pooled undetermined sample
+bcftools view \
+  -s ^Undetermined_S0 \
+  -Oz \
+  -o variants/filtered_noUndet.vcf.gz \
+  variants/filtered_snps.vcf.gz
+#index it
+bcftools index variants/filtered_noUndet.vcf.gz
+
+#verify
+bcftools query -l variants/filtered_noUndet.vcf.gz
+#enforce a core SNP state
+bcftools view \
+  -i 'COUNT(GT!=".")>=16' \
+  -Oz \
+  -o variants/core_snps.vcf.gz \
+  variants/filtered_noUndet.vcf.gz
+
+#index it
+bcftools index variants/core_snps.vcf.gz
+#check how many snps remain
+bcftools view -H variants/core_snps.vcf.gz | wc -l
+
+#Create the SNP matrix (R / PCA / tree-ready)
+bcftools query \
+  -f '%CHROM\t%POS[\t%GT]\n' \
+  variants/core_snps.vcf.gz \
+  > variants/core_snp_matrix.tsv
+#preview
+head variants/core_snp_matrix.tsv
+---------------------
+----------------
+#confirm 19samples
+bcftools query -l variants/core_snps.vcf.gz | wc -l
+
+#confirm haploid genotypes
+bcftools query -f '[%GT\t]\n' variants/core_snps.vcf.gz | head
+
+#confirm sample count
+
+#confirm no weird diploid calls
+bcftools query -f '[%GT\t]\n' variants/core_snps.vcf.gz | head
+
+

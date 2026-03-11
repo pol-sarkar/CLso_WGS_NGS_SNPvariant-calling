@@ -1,0 +1,19 @@
+#Go to your bam file folder
+cd /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/trimmed/bam_files/
+
+#Step 2: Run variant calling with samtools + bcftools
+  ref="/rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCA_000183665.1/GCA_000183665.1_ASM18366v1_genomic.fna"
+
+  #install samtools via conda
+  conda create -n bioinfo -c bioconda -c conda-forge samtools bwa -y
+  #activate the environment
+  conda activate bioinfo
+  
+  
+#verify installation
+  samtools --version
+  bwa 
+  
+  #index the ref genome
+  samtools faidx /rhome/poulamis/shared/labprojects/WGS-Liberibacter-Pol/Reference/ncbi_dataset/data/GCA_000183665.1/GCA_000183665.1_ASM18366v1_genomic.fna
+  #(This will create a file named GCA_000183665.1_ASM18366v1_genomic.fna.fai in the same directory.)

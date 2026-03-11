@@ -1,0 +1,30 @@
+16S tree: branch numbers and bootstrap
+
+library(ape)
+library(ggtree)
+library(ggplot2)
+library(ape)
+library(ggtree)
+library(ggplot2)
+
+tree <- read.tree("MLST/tree/samples19_plus_ZC1_16S.contree")
+aln  <- read.FASTA("MLST/phy/samples19_plus_ZC1.16S.aln.fa")
+L <- length(aln[[1]])
+
+# Build the ggtree object first
+p <- ggtree(tree)
+
+# Add branch SNP counts into the plot's internal data
+p$data$edge_snps <- p$data$branch.length * L
+
+# Plot with tip labels + bootstrap (node labels) + branch SNP counts
+p2 <- p +
+  geom_tiplab(size=2.5, align=TRUE) +
+  geom_text2(aes(subset=!isTip & !is.na(label), label=label),
+             size=2.2, vjust=-0.6) +
+  geom_text2(aes(subset=!isTip, label=round(edge_snps, 1)),
+             size=2.0, vjust=1.2) +
+  theme_tree2() +
+  ggtitle(paste0("16S tree: branch SNPs ≈ branch_length × ", L, " sites"))
+
+p2
