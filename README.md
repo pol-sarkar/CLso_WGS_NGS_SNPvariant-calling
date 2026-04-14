@@ -18,7 +18,7 @@ BioProject: PRJNA1399511
 
 
 
-This repository contains scripts used to process and analyze CLso whole genome sequencing data from psyllids and plant hosts.
+This repository contains scripts used to process and analyze CLso whole genome sequencing data from psyllids and plant hosts for variant calling only.
 
 
 
