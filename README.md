@@ -2,7 +2,7 @@
 
 
 
-Pipeline for analyzing **Candidatus Liberibacter solanacearum (CLso)** genomes associated with *Solanum umbelliferum* in California.
+Pipeline for analyzing **Candidatus Liberibacter solanacearum (CLso)** genomes associated with *Solanum umbelliferum* in California using reference genome CLso-ZC1.
 
 
 
