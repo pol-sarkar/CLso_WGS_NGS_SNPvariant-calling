@@ -1,4 +1,4 @@
-# CLso Whole Genome Sequencing Analysis
+# CLso Whole Genome Sequence- Variant calling analysis (Short read-NGS)
 
 
 
